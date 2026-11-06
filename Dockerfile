@@ -8,7 +8,7 @@ WORKDIR /srv
 COPY requirements.txt /srv/requirements.txt
 RUN pip install --no-cache-dir -r /srv/requirements.txt
 
-COPY app /srv/app
+COPY ./app /srv/app
 
 EXPOSE 8000
 
