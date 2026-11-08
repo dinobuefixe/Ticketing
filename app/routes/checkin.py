@@ -1,4 +1,5 @@
 import os
+from uuid import UUID
 
 import psycopg
 from fastapi import APIRouter
@@ -10,8 +11,8 @@ router = APIRouter()
 
 class CheckinRequest(BaseModel):
     code: str
-    gate_id: int
-    staff_name: str
+    gate_id: UUID
+    staff_id: UUID
 
 
 def connect():
@@ -19,13 +20,13 @@ def connect():
     return psycopg.connect(url)
 
 
-def record_scan(cur, code, ticket_id, gate_id, staff_name, result):
+def record_scan(cur, code, ticket_id, gate_id, staff_id, result):
     cur.execute(
         """
-        INSERT INTO scan_records (code_read, ticket_id, gate_id, staff_name, result)
+        INSERT INTO scan_records (ticket_code, gate_id, ticket_id, staff_id, result)
         VALUES (%s, %s, %s, %s, %s)
         """,
-        (code, ticket_id, gate_id, staff_name, result),
+        (code[:12], gate_id, ticket_id, staff_id, result),
     )
 
 
@@ -54,7 +55,7 @@ def checkin(body: CheckinRequest):
             row = cur.fetchone()
 
             if row is None:
-                record_scan(cur, code, None, body.gate_id, body.staff_name, "unknown_code")
+                record_scan(cur, code, None, body.gate_id, body.staff_id, "unknown_code")
                 return JSONResponse(
                     status_code=404,
                     content={"result": "unknown_code", "detail": "ticket code not found"},
@@ -63,26 +64,26 @@ def checkin(body: CheckinRequest):
             ticket_id, status, is_today = row
 
             if status == "cancelled":
-                record_scan(cur, code, ticket_id, body.gate_id, body.staff_name, "cancelled")
+                record_scan(cur, code, ticket_id, body.gate_id, body.staff_id, "cancelled")
                 return JSONResponse(
                     status_code=409,
                     content={"result": "cancelled", "detail": "ticket is cancelled"},
                 )
 
             if status == "used":
-                record_scan(cur, code, ticket_id, body.gate_id, body.staff_name, "already_used")
+                record_scan(cur, code, ticket_id, body.gate_id, body.staff_id, "already_used")
                 return JSONResponse(
                     status_code=409,
                     content={"result": "already_used", "detail": "ticket was already used"},
                 )
 
             if not is_today:
-                record_scan(cur, code, ticket_id, body.gate_id, body.staff_name, "wrong_day")
+                record_scan(cur, code, ticket_id, body.gate_id, body.staff_id, "wrong_day")
                 return JSONResponse(
                     status_code=409,
                     content={"result": "wrong_day", "detail": "performance is not today"},
                 )
 
             cur.execute("UPDATE tickets SET status = 'used' WHERE id = %s", (ticket_id,))
-            record_scan(cur, code, ticket_id, body.gate_id, body.staff_name, "accepted")
-            return {"result": "accepted", "ticket_id": ticket_id}
+            record_scan(cur, code, ticket_id, body.gate_id, body.staff_id, "accepted")
+            return {"result": "accepted", "ticket_id": str(ticket_id)}
