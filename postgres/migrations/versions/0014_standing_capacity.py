@@ -13,21 +13,25 @@ def upgrade():
             cap  integer;
             sold integer;
         BEGIN
-            IF NEW.seat_id IS NULL AND NEW.status IN ('valid','used') THEN
-                SELECT capacity INTO cap
-                FROM sections WHERE id = NEW.section_id FOR UPDATE;
+            IF NEW.seat_id IS NOT NULL OR NEW.status NOT IN ('valid', 'used') THEN
+                RETURN NEW;
+            END IF;
 
-                SELECT count(*) INTO sold FROM tickets
-                WHERE performance_id = NEW.performance_id
-                  AND section_id = NEW.section_id
-                  AND seat_id IS NULL
-                  AND status IN ('valid','used')
-                  AND id <> NEW.id;
+            SELECT standing_capacity INTO cap
+            FROM sections WHERE id = NEW.section_id FOR UPDATE;
 
-                IF sold >= cap THEN
-                    RAISE EXCEPTION 'standing section is full'
-                        USING ERRCODE = '23514';
-                END IF;
+            SELECT count(*) INTO sold
+            FROM tickets
+            WHERE section_id = NEW.section_id
+              AND performance_id = NEW.performance_id
+              AND seat_id IS NULL
+              AND status IN ('valid', 'used')
+              AND id <> NEW.id;
+
+            IF sold + 1 > cap THEN
+                RAISE EXCEPTION 'standing section % is full for performance %',
+                    NEW.section_id, NEW.performance_id
+                    USING ERRCODE = 'check_violation';
             END IF;
             RETURN NEW;
         END

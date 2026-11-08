@@ -9,15 +9,15 @@ depends_on = None
 def upgrade():
     op.execute("""
         CREATE TABLE promo_codes (
-            id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-            code             text NOT NULL UNIQUE,
-            discount_percent integer,
-            discount_amount  numeric(10,2),
-            valid_from       timestamptz NOT NULL,
-            valid_to         timestamptz NOT NULL,
-            event_id         bigint REFERENCES events(id) ON DELETE RESTRICT,
-            max_uses         integer NOT NULL,
-            uses             integer NOT NULL DEFAULT 0
+            id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            code        text NOT NULL UNIQUE,
+            percent_off smallint,
+            amount_off  numeric(10, 2),
+            valid_from  timestamptz NOT NULL,
+            valid_until timestamptz NOT NULL,
+            event_id    uuid REFERENCES events(id) ON DELETE RESTRICT,
+            max_uses    integer NOT NULL,
+            uses        integer NOT NULL DEFAULT 0
         );
     """)
     op.execute("""
@@ -27,16 +27,15 @@ def upgrade():
     """)
     op.execute("""
         CREATE TABLE scan_records (
-            id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-            code_read  text NOT NULL,
-            ticket_id  bigint REFERENCES tickets(id) ON DELETE RESTRICT,
-            gate_id    bigint NOT NULL REFERENCES gates(id) ON DELETE RESTRICT,
-            staff_name text NOT NULL,
-            scanned_at timestamptz NOT NULL DEFAULT now(),
-            result     text NOT NULL,
-            CONSTRAINT scan_records_result_ok CHECK (
-                result IN ('accepted','already_used','cancelled',
-                           'wrong_day','unknown_code'))
+            id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            ticket_code char(12) NOT NULL,
+            gate_id     uuid NOT NULL REFERENCES gates(id) ON DELETE RESTRICT,
+            ticket_id   uuid REFERENCES tickets(id) ON DELETE RESTRICT,
+            staff_id    uuid NOT NULL,
+            result      text NOT NULL CHECK (result IN (
+                            'accepted', 'already_used', 'cancelled', 'wrong_day', 'unknown_code')),
+            scanned_at  timestamptz NOT NULL DEFAULT now(),
+            CHECK ((result = 'unknown_code') = (ticket_id IS NULL))
         );
     """)
 

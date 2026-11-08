@@ -8,11 +8,11 @@ depends_on = None
 
 def upgrade():
     op.execute("""
-        CREATE UNIQUE INDEX tickets_one_seat_per_performance
+        CREATE UNIQUE INDEX tickets_one_valid_seat
         ON tickets (performance_id, seat_id)
-        WHERE seat_id IS NOT NULL AND status IN ('valid','used');
+        WHERE seat_id IS NOT NULL AND status IN ('valid', 'used');
     """)
 
 
 def downgrade():
-    op.execute("DROP INDEX IF EXISTS tickets_one_seat_per_performance;")
+    op.execute("DROP INDEX IF EXISTS tickets_one_valid_seat;")
