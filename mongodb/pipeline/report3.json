@@ -1,0 +1,17 @@
+{
+  "collection": "report_orders",
+  "description": "The 10 events that sold most tickets in each city in the last 30 days.",
+  "pipeline": [
+    {"$match": {"status": "paid"}},
+    {"$match": {"$expr": {"$gte": ["$paid_at", {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 30}}]}}},
+    {"$group": {"_id": {"city": "$city", "event_id": "$event_id"},
+                "event_title": {"$first": "$event_title"},
+                "tickets_sold": {"$sum": {"$size": "$tickets"}}}},
+    {"$sort": {"_id.city": 1, "tickets_sold": -1, "_id.event_id": 1}},
+    {"$group": {"_id": "$_id.city",
+                "top_events": {"$push": {"event_id": "$_id.event_id", "title": "$event_title",
+                                         "tickets_sold": "$tickets_sold"}}}},
+    {"$project": {"_id": 0, "city": "$_id", "top_events": {"$slice": ["$top_events", 10]}}},
+    {"$sort": {"city": 1}}
+  ]
+}
