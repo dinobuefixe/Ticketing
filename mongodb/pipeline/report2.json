@@ -1,0 +1,20 @@
+{
+  "collection": "report_orders",
+  "description": "Revenue per organiser per month, current month plus the previous 11.",
+  "pipeline": [
+    {"$match": {"status": "paid"}},
+    {"$match": {"$expr": {"$gte": ["$paid_at", {"$dateSubtract": {
+      "startDate": {"$dateTrunc": {"date": "$$NOW", "unit": "month", "timezone": "Europe/Lisbon"}},
+      "unit": "month", "amount": 11, "timezone": "Europe/Lisbon"}}]}}},
+    {"$group": {
+      "_id": {"organiser_id": "$organiser_id",
+              "month": {"$dateToString": {"format": "%Y-%m", "date": "$paid_at", "timezone": "Europe/Lisbon"}}},
+      "orders": {"$sum": 1},
+      "tickets": {"$sum": {"$size": "$tickets"}},
+      "revenue_cents": {"$sum": "$total_cents"}}},
+    {"$project": {"_id": 0, "organiser_id": "$_id.organiser_id", "month": "$_id.month",
+                  "orders": 1, "tickets": 1,
+                  "revenue_eur": {"$round": [{"$divide": ["$revenue_cents", 100]}, 2]}}},
+    {"$sort": {"organiser_id": 1, "month": 1}}
+  ]
+}
