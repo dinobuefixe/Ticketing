@@ -1,0 +1,12 @@
+{
+  "collection": "hold_attempts",
+  "description": "Hours of the day (Lisbon time) with most refused hold attempts, from the hold-attempt log.",
+  "pipeline": [
+    {"$group": {"_id": {"$hour": {"date": "$attempted_at", "timezone": "Europe/Lisbon"}},
+                "attempts": {"$sum": 1},
+                "refused": {"$sum": {"$cond": [{"$eq": ["$result", "refused"]}, 1, 0]}}}},
+    {"$project": {"_id": 0, "hour": "$_id", "attempts": 1, "refused": 1,
+                  "refusal_rate_pct": {"$round": [{"$multiply": [{"$divide": ["$refused", "$attempts"]}, 100]}, 1]}}},
+    {"$sort": {"refused": -1, "hour": 1}}
+  ]
+}
