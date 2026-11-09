@@ -5,6 +5,16 @@ BEGIN;
 SET LOCAL synchronous_commit = off;
 SET LOCAL work_mem = '128MB';
 
+INSERT INTO customers (id, name, email, password_hash, date_of_birth, phone)
+SELECT md5('customer:' || i)::uuid,
+       'Customer ' || i,
+       'customer' || i || '@seed.local',
+       'x',
+       date '1960-01-01' + (i * 37 % 15000),
+       '9' || lpad(i::text, 8, '0')
+FROM generate_series(1, 100000) i
+WHERE NOT EXISTS (SELECT 1 FROM customers);
+
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM performances) OR NOT EXISTS (SELECT 1 FROM customers) THEN
