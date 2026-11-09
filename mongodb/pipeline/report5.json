@@ -1,0 +1,30 @@
+{
+  "collection": "report_orders",
+  "description": "Per promo code: orders, total discount, and average order value with the code vs. without any code for the same events.",
+  "pipeline": [
+    {"$match": {"status": "paid"}},
+    {"$group": {"_id": {"event_id": "$event_id", "code": "$promo_code"},
+                "orders": {"$sum": 1}, "revenue_cents": {"$sum": "$total_cents"},
+                "discount_cents": {"$sum": "$discount_cents"}}},
+    {"$group": {"_id": "$_id.event_id",
+                "rows": {"$push": {"code": "$_id.code", "orders": "$orders",
+                                   "revenue_cents": "$revenue_cents", "discount_cents": "$discount_cents"}}}},
+    {"$addFields": {"no_code": {"$first": {"$filter": {
+      "input": "$rows", "as": "r", "cond": {"$eq": ["$$r.code", null]}}}}}},
+    {"$unwind": "$rows"},
+    {"$match": {"rows.code": {"$ne": null}}},
+    {"$group": {"_id": "$rows.code",
+                "events": {"$sum": 1},
+                "orders": {"$sum": "$rows.orders"},
+                "discount_cents": {"$sum": "$rows.discount_cents"},
+                "revenue_cents": {"$sum": "$rows.revenue_cents"},
+                "orders_without_code": {"$sum": {"$ifNull": ["$no_code.orders", 0]}},
+                "revenue_without_code_cents": {"$sum": {"$ifNull": ["$no_code.revenue_cents", 0]}}}},
+    {"$project": {"_id": 0, "code": "$_id", "events": 1, "orders": 1,
+                  "total_discount_eur": {"$round": [{"$divide": ["$discount_cents", 100]}, 2]},
+                  "avg_order_with_code_eur": {"$round": [{"$divide": ["$revenue_cents", {"$multiply": ["$orders", 100]}]}, 2]},
+                  "avg_order_without_code_eur": {"$cond": [{"$gt": ["$orders_without_code", 0]},
+                    {"$round": [{"$divide": ["$revenue_without_code_cents", {"$multiply": ["$orders_without_code", 100]}]}, 2]}, null]}}},
+    {"$sort": {"total_discount_eur": -1}}
+  ]
+}

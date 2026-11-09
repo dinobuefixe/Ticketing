@@ -1,0 +1,30 @@
+{
+  "collection": "report_performances",
+  "description": "Average percentage of capacity sold per venue over the last 90 days, seated and standing apart.",
+  "pipeline": [
+    {"$match": {"status": {"$ne": "cancelled"}}},
+    {"$match": {"$expr": {"$and": [
+      {"$gte": ["$starts_at", {"$dateSubtract": {"startDate": "$$NOW", "unit": "day", "amount": 90}}]},
+      {"$lt": ["$starts_at", "$$NOW"]}]}}},
+    {"$addFields": {
+      "seated_sold": {"$sum": {"$map": {
+        "input": {"$filter": {"input": "$sections", "as": "s", "cond": {"$eq": ["$$s.kind", "seated"]}}},
+        "as": "s", "in": "$$s.sold"}}},
+      "standing_sold": {"$sum": {"$map": {
+        "input": {"$filter": {"input": "$sections", "as": "s", "cond": {"$eq": ["$$s.kind", "standing"]}}},
+        "as": "s", "in": "$$s.sold"}}}}},
+    {"$group": {
+      "_id": "$venue_id",
+      "venue_name": {"$first": "$venue_name"},
+      "city": {"$first": "$city"},
+      "performances": {"$sum": 1},
+      "avg_seated_pct": {"$avg": {"$cond": [{"$gt": ["$seated_capacity", 0]},
+        {"$multiply": [{"$divide": ["$seated_sold", "$seated_capacity"]}, 100]}, null]}},
+      "avg_standing_pct": {"$avg": {"$cond": [{"$gt": ["$standing_capacity", 0]},
+        {"$multiply": [{"$divide": ["$standing_sold", "$standing_capacity"]}, 100]}, null]}}}},
+    {"$project": {"_id": 0, "venue_id": "$_id", "venue_name": 1, "city": 1, "performances": 1,
+                  "avg_seated_pct": {"$round": ["$avg_seated_pct", 1]},
+                  "avg_standing_pct": {"$round": ["$avg_standing_pct", 1]}}},
+    {"$sort": {"venue_name": 1}}
+  ]
+}
