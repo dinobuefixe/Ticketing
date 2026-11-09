@@ -1,0 +1,31 @@
+[
+  {
+    "$addFields": {
+      "revenue_total": { "$sum": "$sections.revenue" },
+      "check_in_rate": {
+        "$cond": [
+          { "$gt": ["$tickets_sold", 0] },
+          { "$divide": ["$tickets_used", "$tickets_sold"] },
+          0
+        ]
+      }
+    }
+  },
+  { "$sort": { "starts_at": -1 } },
+  {
+    "$project": {
+      "_id": 0,
+      "performance_id": 1,
+      "event_title": 1,
+      "venue_name": 1,
+      "starts_at": 1,
+      "status": 1,
+      "tickets_sold": 1,
+      "revenue_total": 1,
+      "check_in_rate": 1,
+      "sections": 1,
+      "payment_methods": 1,
+      "promo_codes": 1
+    }
+  }
+]
