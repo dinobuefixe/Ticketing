@@ -51,7 +51,7 @@ echo "Passo 2: migrações Alembic e grants (owner)"
 
 command -v uv >/dev/null || { echo "FALHOU: uv não está instalado"; exit 1; }
 
-uv run --with-requirements requirements.txt \
+uv run --with-requirements app/requirements.txt \
     alembic -c postgres/alembic.ini upgrade head
 
 # Grants: o role app lê tudo e escreve só nas tabelas que a API usa.
@@ -63,7 +63,7 @@ docker compose exec -T postgres psql \
 GRANT USAGE ON SCHEMA public TO :"app_user", :"ro_user";
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO :"app_user", :"ro_user";
 
-GRANT INSERT, UPDATE ON holds, hold_items, orders, tickets, payments, promo_codes TO :"app_user";
+GRANT INSERT, UPDATE ON holds, hold_items, orders, tickets, payments, promo_codes, performances, sections TO :"app_user";
 GRANT INSERT ON scan_records TO :"app_user";
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO :"app_user", :"ro_user";
