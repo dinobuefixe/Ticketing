@@ -1,45 +1,48 @@
-import os
+"""Mini app do Projeto A (Ticketing).
 
-import psycopg
-import redis
-from fastapi import APIRouter, FastAPI, FastAPI, Response
-from pymongo import MongoClient, response
-from app.routes import reports
+Cada fluxo tem o seu router em app/routes/. Este ficheiro só cria a app e liga os routers.
+Quem age é indicado pelo header X-User-Id (sem autenticação).
+"""
 
+from fastapi import FastAPI, HTTPException, Query, status
+from uuid import UUID
+
+from app.deps import CurrentUser
+from app.routes.health import router as health_router
+from app.routes.cancel import router as cancel_router          # F4 e F6
+from app.routes.checkin import router as checkin_router        # F5
+from app.routes.checkout import router as checkout_router      # F3
+from app.routes.holds import router as holds_router            # F2
+from app.routes.reports import router as reports_router        # F7
+from app.routes.seat_map import router as seat_map_router      # F1
 
 app = FastAPI(title="Ticketing API", version="0.1.0")
-app.include_router(reports.router)
 
-def check_postgres() -> None:
-    url = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(url, connect_timeout=2) as conn:
-        conn.execute("SELECT 1")
- 
- 
-def check_mongo() -> None:
-    client = MongoClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=2000)
-    try:
-        client.admin.command("ping")
-    finally:
-        client.close()
+app.include_router(health_router)     # GET /health/services
+app.include_router(seat_map_router)   # F1: GET /performances/{id}/seat-map
+app.include_router(holds_router)      # F2: POST /performances/{id}/holds
+app.include_router(checkout_router)   # F3: POST /holds/{id}/checkout
+app.include_router(cancel_router)     # F4 e F6: cancelar encomenda e performance
+app.include_router(checkin_router)    # F5: POST /check-in
+app.include_router(reports_router)    # F7: relatórios
 
 
-def check_redis() -> None:
-    redis.Redis.from_url(os.environ["REDIS_URL"], socket_timeout=2).ping()
+# ---------- Endpoints que ainda não têm ficheiro de router ----------
+# Quando forem implementados, mudam para um ficheiro em app/routes/ e são incluídos acima.
+
+def not_implemented(name: str) -> None:
+    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"{name}: por implementar")
 
 
-@app.get("/health/services", tags=["Health"])
-def services_health(response: Response):
-    checks = {"postgres": check_postgres, "mongo": check_mongo, "redis": check_redis}
-    result = {}
-    for name, check in checks.items():
-        try:
-            check()
-            result[name] = "ok"
-        except Exception as exc:
-            result[name] = f"error: {type(exc).__name__}"
+@app.get("/customers/me/orders", tags=["Orders"])
+def list_my_orders(
+    user_id: CurrentUser,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=20),
+):
+    not_implemented("listar encomendas")
 
-    healthy = all(value == "ok" for value in result.values())
-    if not healthy:
-        response.status_code = 503
-    return {"status": "ok" if healthy else "degraded", "services": result}
+
+@app.get("/orders/{order_id}", tags=["Orders"])
+def get_order(order_id: UUID, user_id: CurrentUser):
+    not_implemented("ver encomenda")
