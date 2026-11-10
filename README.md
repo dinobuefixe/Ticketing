@@ -219,3 +219,18 @@ Past performances are `finished` and most of their tickets are `used`. Some perf
 - Ticket transfer from one customer to another, with a new code and the old one cancelled.
 - Dynamic pricing: the price of a section rises as it fills, without changing the price of tickets already sold.
 - Season tickets valid for every performance of an event.
+
+## Part 2: orders, tickets and check-in (M2)
+
+| Endpoint | Who | What it does |
+|----------|-----|--------------|
+| `POST /checkout` | Customer (`X-User-Id` header) | Pays a hold with a simulated payment (`approved` or `declined`), with an optional promo code. An approved payment creates the order as `paid` and issues the tickets. A declined payment keeps the order `pending` and the hold running. |
+| `POST /orders/{order_id}/cancel` | Customer (`X-User-Id` header) | Cancels a paid order up to 48 hours before the performance. Creates a `refunded` payment and sets the tickets to `cancelled`. |
+| `POST /performances/{performance_id}/cancel` | Organiser (no user header) | Cancels a performance, refunds its paid orders, cancels its pending orders and releases its active holds. |
+| `POST /checkin` | Gate staff | Scans a ticket code at a gate. Results: `accepted`, `already_used`, `cancelled`, `wrong_day`, `unknown_code`. Every scan is recorded. |
+
+Tests (they need the stack running):
+- `python app/tests/test_promo.py`: 20 clients use a promo code with 5 uses.
+- `python app/tests/test_last_places.py`: 100 clients buy the last 10 standing places.
+
+Seed for orders, tickets, payments and scans: `postgres/seed/part2.sql`.
