@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -10,6 +11,8 @@ from app.cache import ensure_performance_loaded
 from app.clients import pg
 from app.deps import CurrentUser
 from app.lua_scripts import get_scripts, perf_keys
+from app.naive_holds import naive_reserve
+from mongodb.hold_attempts import log_attempt
 
 router = APIRouter()
 
@@ -41,8 +44,7 @@ def age_on(birth, day) -> int:
     return day.year - birth.year - ((day.month, day.day) < (birth.month, birth.day))
 
 
-@router.post("/performances/{performance_id}/holds", status_code=201, tags=["F2 Hold"])
-def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUser):
+def _attempt(performance_id: UUID, body: HoldRequest, customer_id: UUID):
     pid, cid = str(performance_id), str(customer_id)
     scripts = get_scripts()
 
@@ -123,10 +125,13 @@ def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUse
         "hold_id": hold_id, "performance_id": pid, "customer_id": cid,
         "section_id": section_id, "places": body.places, "seat_ids": seat_ids,
     })
-    result = scripts["hold"](
-        keys=perf_keys(pid),
-        args=[hold_id, HOLD_TTL_SECONDS, data, section_id or "", body.places or 0, *seat_ids],
-    )
+    if os.environ.get("HOLD_MODE") == "naive" and seat_ids:
+        result = naive_reserve(pid, hold_id, seat_ids, data, HOLD_TTL_SECONDS)
+    else:
+        result = scripts["hold"](
+            keys=perf_keys(pid),
+            args=[hold_id, HOLD_TTL_SECONDS, data, section_id or "", body.places or 0, *seat_ids],
+        )
     if result[0] == "SOLD":
         raise HTTPException(status_code=409, detail=f"lugar {result[1]} já vendido")
     if result[0] == "HELD":
@@ -169,3 +174,24 @@ def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUse
         "section_id": section_id,
         "places": body.places,
     }
+
+
+@router.post("/performances/{performance_id}/holds", status_code=201, tags=["F2 Hold"])
+def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUser):
+    # Regista cada tentativa no MongoDB, aceite ou recusada (inclui o limite de 429)
+    if body.seat_ids:
+        requested = {"seat_ids": [str(s) for s in body.seat_ids]}
+    else:
+        requested = {"section_id": str(body.section_id), "places": body.places}
+
+    try:
+        response = _attempt(performance_id, body, customer_id)
+    except HTTPException as exc:
+        log_attempt(str(customer_id), str(performance_id), requested, "refused", str(exc.detail))
+        raise
+    except Exception:
+        log_attempt(str(customer_id), str(performance_id), requested, "refused", "erro interno")
+        raise
+
+    log_attempt(str(customer_id), str(performance_id), requested, "accepted")
+    return response
