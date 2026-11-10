@@ -4,7 +4,6 @@ import secrets
 import string
 import time
 from decimal import Decimal
-from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
@@ -17,7 +16,6 @@ from pydantic import BaseModel
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-LUA_PATH = Path(__file__).resolve().parents[2] / "redis" / "trending.lua"
 CODE_ALPHABET = string.ascii_uppercase + string.digits
 
 
@@ -43,18 +41,21 @@ def ticket_code():
 
 def update_counters(performance_id, event_id, sold):
     try:
-        client = redis.Redis.from_url(os.environ["REDIS_URL"], socket_timeout=2)
-        script = client.register_script(LUA_PATH.read_text())
+        client = redis.Redis.from_url(
+            os.environ["REDIS_URL"], decode_responses=True, socket_timeout=2
+        )
         minute = int(time.time() // 60)
+        current = f"sales:trending:{minute}"
+
+        pipe = client.pipeline()
         for section_id, quantity in sold.items():
-            script(
-                keys=[
-                    f"sales:trending:{minute}",
-                    f"sales:perf:{performance_id}:sold",
-                    f"sales:perf:{performance_id}:section:{section_id}:left",
-                ],
-                args=[str(event_id), quantity, 3660],
-            )
+            pipe.hincrby(f"sales:sold:{performance_id}", str(section_id), quantity)
+        pipe.zincrby(current, sum(sold.values()), str(event_id))
+        pipe.expire(current, 3660)
+        sources = [f"sales:trending:{minute - i}" for i in range(60)]
+        pipe.zunionstore("sales:trending", sources)
+        pipe.zremrangebyscore("sales:trending", "-inf", 0)
+        pipe.execute()
     except Exception:
         log.warning("could not update redis counters", exc_info=True)
 
