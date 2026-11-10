@@ -12,7 +12,7 @@ from app.clients import pg
 from app.deps import CurrentUser
 from app.naive_holds import naive_reserve
 from app.redis_ops import count_hold_attempt, release_hold, reserve_hold, sweep_standing
-from mongodb.hold_attempts import log_attempt
+from app.hold_attempts import log_attempt
 
 router = APIRouter()
 
