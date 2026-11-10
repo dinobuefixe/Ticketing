@@ -4,9 +4,11 @@ import psycopg
 import redis
 from fastapi import APIRouter, FastAPI, FastAPI, Response
 from pymongo import MongoClient, response
+from app.routes import reports
+
 
 app = FastAPI(title="Ticketing API", version="0.1.0")
-
+app.include_router(reports.router)
 
 def check_postgres() -> None:
     url = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
