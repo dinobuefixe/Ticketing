@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Setup do projeto. Pode ser corrido várias vezes sem erro. Lê tudo do .env.
 #   Passo 1: PostgreSQL, roles, base de dados e extensões (superuser)
+#   Passo 2: PostgreSQL, migrações Alembic e grants dos roles app e leitura (owner)
 #   Passo 3: MongoDB, utilizador da app, coleções e índices (root)
 #   Passo 4: Redis, confirma que responde com password e não responde sem ela
-# O passo 2 (migrações Alembic, como owner) ainda não está incluído.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -11,7 +11,7 @@ set -a
 . ./.env
 set +a
 
-# ---------- Passo 1: PostgreSQL ----------
+# ---------- Passo 1: PostgreSQL, roles e base de dados ----------
 echo "Passo 1: roles, base de dados e extensões (superuser)"
 
 docker compose exec -T postgres psql \
@@ -46,6 +46,40 @@ SQL
 
 echo "Passo 1 concluído."
 
+# ---------- Passo 2: migrações e grants (owner) ----------
+echo "Passo 2: migrações Alembic e grants (owner)"
+
+command -v uv >/dev/null || { echo "FALHOU: uv não está instalado"; exit 1; }
+
+uv run --with-requirements requirements.txt \
+    alembic -c postgres/alembic.ini upgrade head
+
+# Grants: o role app lê tudo e escreve só nas tabelas que a API usa.
+# scan_records só recebe INSERT, porque é append-only.
+# ALTER DEFAULT PRIVILEGES aplica os mesmos grants às tabelas criadas no futuro pelo owner.
+docker compose exec -T postgres psql \
+    -U "$POSTGRES_OWNER_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 \
+    -v app_user="$POSTGRES_APP_USER" -v ro_user="$POSTGRES_READONLY_USER" <<'SQL'
+GRANT USAGE ON SCHEMA public TO :"app_user", :"ro_user";
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO :"app_user", :"ro_user";
+
+GRANT INSERT, UPDATE ON holds, hold_items, orders, tickets, payments, promo_codes TO :"app_user";
+GRANT INSERT ON scan_records TO :"app_user";
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO :"app_user", :"ro_user";
+SQL
+
+# Verificação: cada role consegue fazer SELECT numa tabela do esquema
+docker compose exec -T -e PGPASSWORD="$POSTGRES_APP_PASSWORD" postgres psql \
+    -U "$POSTGRES_APP_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q -c "SELECT count(*) FROM venues" >/dev/null \
+    || { echo "FALHOU: o role app não consegue fazer SELECT"; exit 1; }
+
+docker compose exec -T -e PGPASSWORD="$POSTGRES_READONLY_PASSWORD" postgres psql \
+    -U "$POSTGRES_READONLY_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q -c "SELECT count(*) FROM venues" >/dev/null \
+    || { echo "FALHOU: o role de leitura não consegue fazer SELECT"; exit 1; }
+
+echo "Passo 2 concluído."
+
 # ---------- Passo 3: MongoDB ----------
 echo "Passo 3: MongoDB, utilizador da app, coleções e índices (root)"
 
@@ -72,6 +106,15 @@ cat mongodb/setup_collections.js | docker compose exec -T \
     -e DB="$MONGO_DB" \
     mongo mongosh --quiet \
     -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" --authenticationDatabase admin
+
+# Verificação: o utilizador da app consegue listar as coleções da base do projeto
+docker compose exec -T \
+    -e DB="$MONGO_DB" \
+    mongo mongosh --quiet \
+    -u "$MONGO_APP_USER" -p "$MONGO_APP_PASSWORD" --authenticationDatabase "$MONGO_DB" \
+    --eval 'print(db.getSiblingDB(process.env.DB).getCollectionNames().join(","))' \
+    | grep -q "hold_attempts" \
+    || { echo "FALHOU: o utilizador da app não consegue listar a coleção hold_attempts"; exit 1; }
 
 echo "Passo 3 concluído."
 
