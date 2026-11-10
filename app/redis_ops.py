@@ -12,6 +12,8 @@ Estrutura das chaves de uma performance:
   ratelimit:holds:{cliente} string contador de tentativas, com TTL de 60 s
 """
 
+import time
+
 from redis import WatchError
 
 from app.clients import rd
@@ -132,3 +134,38 @@ def release_hold(pid: str, hold_id: str, seat_ids: list[str]) -> None:
         return None, write
 
     _watched([k["held"], k["places"], k["standing"]], body)
+
+
+# ---------- Trending e contadores de vendas (Parte 2) ----------
+# Um sorted set por minuto: trending:{minuto} com event_id -> bilhetes vendidos nesse minuto.
+# A lista "trending now" soma os últimos 60 minutos.
+
+TRENDING_WINDOW_MINUTES = 60
+
+
+def record_sale(pid: str, event_id: str, quantity: int, ttl_seconds: int = 3600) -> None:
+    """Regista uma venda. Corre depois de a encomenda ser paga.
+
+    Não mexe nos lugares livres: esses já foram retirados quando o hold foi criado.
+    Só MULTI é necessário, porque os comandos são somas e não dependem de leituras.
+    """
+    minute_key = f"trending:{int(time.time() // 60)}"
+    with rd().pipeline(transaction=True) as pipe:
+        pipe.zincrby(minute_key, quantity, event_id)
+        pipe.expire(minute_key, ttl_seconds)
+        pipe.incrby(f"perf:{pid}:sold_count", quantity)
+        pipe.execute()
+
+
+def trending_now(limit: int = 20) -> list[tuple[str, float]]:
+    """Os eventos com mais bilhetes vendidos na última hora."""
+    r = rd()
+    now_minute = int(time.time() // 60)
+    keys = [f"trending:{now_minute - i}" for i in range(TRENDING_WINDOW_MINUTES)]
+    keys = [k for k in keys if r.exists(k)]
+    if not keys:
+        return []
+    dest = "trending:window"
+    r.zunionstore(dest, keys)
+    r.expire(dest, 5)  # cache curta: o resultado é recalculado a cada 5 segundos
+    return r.zrevrange(dest, 0, limit - 1, withscores=True)
