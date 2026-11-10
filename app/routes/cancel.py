@@ -2,7 +2,6 @@ import logging
 import os
 import secrets
 import time
-from pathlib import Path
 from uuid import UUID
 
 import psycopg
@@ -12,8 +11,6 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter()
 log = logging.getLogger(__name__)
-
-LUA_PATH = Path(__file__).resolve().parents[2] / "redis" / "trending.lua"
 
 
 def connect():
@@ -27,18 +24,28 @@ def reply(status_code, content):
 
 def update_counters(performance_id, event_id, released):
     try:
-        client = redis.Redis.from_url(os.environ["REDIS_URL"], socket_timeout=2)
-        script = client.register_script(LUA_PATH.read_text())
+        client = redis.Redis.from_url(
+            os.environ["REDIS_URL"], decode_responses=True, socket_timeout=2
+        )
         minute = int(time.time() // 60)
+        current = f"sales:trending:{minute}"
+        sold_key = f"sales:sold:{performance_id}"
+        left_key = f"sales:left:{performance_id}"
+        track_sold = client.exists(sold_key) == 1
+        track_left = client.exists(left_key) == 1
+
+        pipe = client.pipeline()
         for section_id, quantity in released.items():
-            script(
-                keys=[
-                    f"sales:trending:{minute}",
-                    f"sales:perf:{performance_id}:sold",
-                    f"sales:perf:{performance_id}:section:{section_id}:left",
-                ],
-                args=[str(event_id), -quantity, 3660],
-            )
+            if track_sold:
+                pipe.hincrby(sold_key, str(section_id), -quantity)
+            if track_left:
+                pipe.hincrby(left_key, str(section_id), quantity)
+        pipe.zincrby(current, -sum(released.values()), str(event_id))
+        pipe.expire(current, 3660)
+        sources = [f"sales:trending:{minute - i}" for i in range(60)]
+        pipe.zunionstore("sales:trending", sources)
+        pipe.zremrangebyscore("sales:trending", "-inf", 0)
+        pipe.execute()
     except Exception:
         log.warning("could not update redis counters", exc_info=True)
 

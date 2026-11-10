@@ -9,6 +9,8 @@ COPY requirements.txt /srv/requirements.txt
 RUN pip install --no-cache-dir -r /srv/requirements.txt
 
 COPY ./app /srv/app
+COPY ./mongodb/pipelines /srv/mongodb/pipelines
+COPY ./mongodb /srv/mongodb
 
 EXPOSE 8000
 

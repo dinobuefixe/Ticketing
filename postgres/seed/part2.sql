@@ -97,7 +97,7 @@ SELECT p.id AS performance_id,
        seed_hash('offset:' || p.id) AS off_frac,
        (seed_hash('soldout:' || p.id) < 0.03
             AND p.status IN ('on_sale', 'finished', 'sold_out')) AS sold_out,
-       1 + floor(seed_hash('size:' || p.id) * 4)::int AS group_size
+       least(4, 1 + floor(seed_hash('size:' || p.id) * 6)::int) AS group_size
 FROM performances p
 JOIN seed_venue v ON v.venue_id = p.venue_id
 WHERE p.sales_open_at < now();

@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -9,7 +10,9 @@ from pydantic import BaseModel, Field, model_validator
 from app.cache import ensure_performance_loaded
 from app.clients import pg
 from app.deps import CurrentUser
-from app.lua_scripts import get_scripts, perf_keys
+from app.naive_holds import naive_reserve
+from app.redis_ops import count_hold_attempt, release_hold, reserve_hold, sweep_standing
+from mongodb.hold_attempts import log_attempt
 
 router = APIRouter()
 
@@ -41,13 +44,11 @@ def age_on(birth, day) -> int:
     return day.year - birth.year - ((day.month, day.day) < (birth.month, birth.day))
 
 
-@router.post("/performances/{performance_id}/holds", status_code=201, tags=["F2 Hold"])
-def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUser):
+def _attempt(performance_id: UUID, body: HoldRequest, customer_id: UUID):
     pid, cid = str(performance_id), str(customer_id)
-    scripts = get_scripts()
 
-    # 1. Limite de tentativas por minuto. Conta todas as tentativas, mesmo as recusadas.
-    attempts = scripts["rate"](keys=[f"ratelimit:holds:{cid}"], args=[60])
+    # 1. Limite de 10 tentativas por minuto (conta também as recusadas)
+    attempts = count_hold_attempt(cid)
     if attempts > MAX_HOLD_ATTEMPTS_PER_MINUTE:
         raise HTTPException(status_code=429, detail="demasiadas tentativas de hold neste minuto")
 
@@ -70,7 +71,7 @@ def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUse
         if status != "on_sale" or starts_at <= datetime.now(starts_at.tzinfo):
             raise HTTPException(status_code=409, detail="a performance não está à venda")
 
-        # 3. Cliente: existe e tem a idade mínima no dia da performance (Lisboa)
+        # 3. Cliente existe e tem a idade mínima no dia da performance (Lisboa)
         cust = conn.execute("SELECT date_of_birth FROM customers WHERE id = %s", (cid,)).fetchone()
         if cust is None:
             raise HTTPException(status_code=404, detail="cliente não existe")
@@ -93,7 +94,7 @@ def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUse
         if already + requested > MAX_TICKETS_PER_PERFORMANCE:
             raise HTTPException(status_code=409, detail="limite de 6 bilhetes por performance")
 
-        # 5. Os lugares ou a secção existem neste local, com o tipo certo
+        # 5. Lugares ou secção existem neste local, com o tipo certo
         section_by_seat: dict[str, str] = {}
         if seat_ids:
             rows = conn.execute(
@@ -116,22 +117,24 @@ def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUse
 
     # 6. Cache do Redis carregada (só PostgreSQL na primeira vez)
     ensure_performance_loaded(pid)
+    sweep_standing(pid)
 
-    # 7. Reserva atómica no Redis: ou fica tudo reservado, ou nada
+    # 7. Reserva no Redis: ou fica tudo reservado, ou nada
     hold_id = str(uuid4())
     data = json.dumps({
         "hold_id": hold_id, "performance_id": pid, "customer_id": cid,
         "section_id": section_id, "places": body.places, "seat_ids": seat_ids,
     })
-    result = scripts["hold"](
-        keys=perf_keys(pid),
-        args=[hold_id, HOLD_TTL_SECONDS, data, section_id or "", body.places or 0, *seat_ids],
-    )
-    if result[0] == "SOLD":
-        raise HTTPException(status_code=409, detail=f"lugar {result[1]} já vendido")
-    if result[0] == "HELD":
-        raise HTTPException(status_code=409, detail=f"lugar {result[1]} já reservado")
-    if result[0] == "NO_PLACES":
+    if os.environ.get("HOLD_MODE") == "naive" and seat_ids:
+        status_, detail = naive_reserve(pid, hold_id, seat_ids, data, HOLD_TTL_SECONDS)
+    else:
+        status_, detail = reserve_hold(pid, hold_id, seat_ids, section_id,
+                                       body.places or 0, data, HOLD_TTL_SECONDS)
+    if status_ == "SOLD":
+        raise HTTPException(status_code=409, detail=f"lugar {detail} já vendido")
+    if status_ == "HELD":
+        raise HTTPException(status_code=409, detail=f"lugar {detail} já reservado")
+    if status_ == "NO_PLACES":
         raise HTTPException(status_code=409, detail="não há lugares suficientes")
 
     # 8. Gravar no PostgreSQL. Se falhar, desfazer a reserva no Redis.
@@ -158,7 +161,7 @@ def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUse
                     (hold_id, section_id, body.places),
                 )
     except Exception:
-        scripts["release"](keys=perf_keys(pid), args=[hold_id, *seat_ids])
+        release_hold(pid, hold_id, seat_ids)
         raise HTTPException(status_code=503, detail="falha ao gravar a reserva, tente novamente")
 
     return {
@@ -169,3 +172,24 @@ def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUse
         "section_id": section_id,
         "places": body.places,
     }
+
+
+@router.post("/performances/{performance_id}/holds", status_code=201, tags=["F2 Hold"])
+def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUser):
+    # Regista cada tentativa no MongoDB, aceite ou recusada (inclui o limite de 429)
+    if body.seat_ids:
+        requested = {"seat_ids": [str(s) for s in body.seat_ids]}
+    else:
+        requested = {"section_id": str(body.section_id), "places": body.places}
+
+    try:
+        response = _attempt(performance_id, body, customer_id)
+    except HTTPException as exc:
+        log_attempt(str(customer_id), str(performance_id), requested, "refused", str(exc.detail))
+        raise
+    except Exception:
+        log_attempt(str(customer_id), str(performance_id), requested, "refused", "erro interno")
+        raise
+
+    log_attempt(str(customer_id), str(performance_id), requested, "accepted")
+    return response

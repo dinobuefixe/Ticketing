@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from app.cache import ensure_performance_loaded
 from app.clients import rd
 from app.deps import CurrentUser
-from app.lua_scripts import get_scripts, perf_keys
+from app.redis_ops import perf_keys, sweep_standing
 
 router = APIRouter()
 
@@ -22,18 +22,17 @@ def seat_map(performance_id: UUID, user_id: CurrentUser):
         raise HTTPException(status_code=404, detail="performance não existe")
 
     r = rd()
+    sweep_standing(pid)
 
-    # Limpar reservas expiradas antes de ler (só Redis)
-    get_scripts()["sweep"](keys=perf_keys(pid))
-
+    k = perf_keys(pid)
     venue_id = r.get(f"perf:{pid}:venue")
     layout = json.loads(r.get(f"venue:{venue_id}:layout"))
     prices = r.hgetall(f"perf:{pid}:prices")
-    sold = r.smembers(f"perf:{pid}:sold")
-    held = r.hgetall(f"perf:{pid}:held")
-    places_left = r.hgetall(f"perf:{pid}:places_left")
+    sold = r.smembers(k["sold"])
+    held = r.hgetall(k["held"])
+    places_left = r.hgetall(k["places"])
 
-    # Uma reserva só conta se a chave hold:{id} ainda existir (não expirou)
+    # Uma reserva só conta se a chave hold:{id} ainda existir
     holders = list(set(held.values()))
     pipe = r.pipeline()
     for holder in holders:
