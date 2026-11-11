@@ -8,7 +8,7 @@
 |------|-----------------|--------|---------------------------|
 | Orders, tickets, payments, promo code uses, scan records | PostgreSQL | none | Not applicable. Everything is written in one transaction. |
 | Sale counters and the "trending now" list | PostgreSQL (derived) | Redis | The sale stays valid. The failure is logged and the counters are rebuilt from PostgreSQL with `redis/rebuild.py`. `redis/verify.py` shows any difference. |
-| Sales by performance (report 1) | PostgreSQL (derived) | MongoDB `sales_by_performance` | PostgreSQL is not affected. The report is old until the export runs again. The export can run any number of times. |
+| Reports (orders and performances) | PostgreSQL (derived) | MongoDB `report_orders` and `report_performances` | PostgreSQL is not affected. The reports are old until `mongodb/export_reports.py` runs again. The export can run any number of times and gives the same result. |
 
 ### Why PostgreSQL is written first
 
@@ -32,4 +32,8 @@ The app rules are in the app because they depend on the current time and are che
 
 ### Data that expires
 
-The "trending now" counters only count sales of the last hour. They are derived data and are removed automatically.
+| Data | How long it lives | Where |
+|------|-------------------|-------|
+| The "trending now" window | Sales of the last hour | Redis. Sales are counted in one key per minute (`sales:trending:{minute}`), each with a TTL of 3660 seconds. The list `sales:trending` is rebuilt from the last 60 minute keys after every sale or cancellation. |
+
+These counters are derived data. If they are lost, `redis/rebuild.py` rebuilds them from PostgreSQL.
