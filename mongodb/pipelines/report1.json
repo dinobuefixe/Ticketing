@@ -1,31 +1,31 @@
-[
-  {
-    "$addFields": {
-      "revenue_total": { "$sum": "$sections.revenue" },
-      "check_in_rate": {
-        "$cond": [
-          { "$gt": ["$tickets_sold", 0] },
-          { "$divide": ["$tickets_used", "$tickets_sold"] },
-          0
-        ]
-      }
-    }
-  },
-  { "$sort": { "starts_at": -1 } },
-  {
-    "$project": {
+{
+  "collection": "report_performances",
+  "description": "Tickets sold, revenue per section and check-in rate per performance.",
+  "pipeline": [
+    {"$match": {"tickets_sold": {"$gt": 0}}},
+    {"$sort": {"starts_at": -1}},
+    {"$project": {
       "_id": 0,
-      "performance_id": 1,
+      "performance_id": "$_id",
       "event_title": 1,
       "venue_name": 1,
+      "city": 1,
       "starts_at": 1,
       "status": 1,
       "tickets_sold": 1,
-      "revenue_total": 1,
-      "check_in_rate": 1,
-      "sections": 1,
-      "payment_methods": 1,
-      "promo_codes": 1
-    }
-  }
-]
+      "checked_in": 1,
+      "check_in_rate": {"$round": [{"$divide": ["$checked_in", "$tickets_sold"]}, 4]},
+      "revenue_total": {"$round": [{"$divide": ["$gross_cents", 100]}, 2]},
+      "sections": {"$map": {
+        "input": "$sections",
+        "as": "s",
+        "in": {
+          "name": "$$s.name",
+          "kind": "$$s.kind",
+          "sold": "$$s.sold",
+          "revenue": {"$round": [{"$divide": ["$$s.gross_cents", 100]}, 2]}
+        }
+      }}
+    }}
+  ]
+}
