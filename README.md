@@ -1,236 +1,263 @@
-# Project A: Ticketing
+# Ticketing
 
-Read [README.md](README.md) first. It has the rules, requirements, documentation, Git rules and grading that apply to this project. This file describes the business.
+A ticketing platform for concerts, theatre, comedy and sport in venues across Portugal. Customers hold seats, pay, cancel and receive tickets, and gate staff scan them at the door. The hard part is the on-sale moment, when thousands of customers try to buy the same seats at the same time, so PostgreSQL enforces that a seat is never sold twice, a standing section never goes over capacity and a promo code is never used more than its maximum.
 
-## Context
+## Run it from a clean clone
 
-A ticketing company sells tickets for concerts, theatre, comedy and sport events in venues across Portugal. Organisers publish events, the company sells the tickets online, and venue staff scan them at the door.
+You need Docker with Docker Compose, [uv](https://docs.astral.sh/uv/) and a Bash shell (Git Bash on Windows).
 
-The big problem of the business is the on-sale moment. When tickets for a popular concert go on sale at 10:00, thousands of customers try to buy the same seats in the same second. A seat sold twice means two people at the door with valid tickets for the same chair, a refund, a complaint and bad press. Your project must make that impossible.
+```bash
+git clone https://github.com/dinobuefixe/Ticketing.git
+cd Ticketing
+cp .env.example .env
+docker compose up -d
+./scripts/setup.sh
+./scripts/seed.sh
+```
 
-## Actors
+- Replace every `change-me` in `.env` with your own secrets before running `setup.sh`. The roles and passwords are read from that file.
+- `setup.sh` creates the PostgreSQL roles, runs the migrations, creates the MongoDB user and collections and checks Redis. It can be run again without errors.
+- `seed.sh` loads the demo data and takes about 5 minutes: 30 venues, 4,000 performances, 100,000 customers, about 480,000 orders and 1.1 million tickets, plus the MongoDB reports and the Redis counters.
+- The scripts need Unix line endings. On Windows, run them from Git Bash.
+- If uv picks a Python newer than 3.13, run `export UV_PYTHON=3.12` first.
 
-- **Customer**: browses events, holds seats, pays, cancels, receives tickets.
-- **Organiser**: a company that publishes events and receives the revenue.
-- **Venue staff**: scan tickets at the gates.
-- **Back office**: the company's staff, who create venues, cancel performances and read reports.
+Check that everything is up:
 
-## Requirements
+```bash
+curl -s localhost:8000/health/services
+```
 
-Everything below must be representable in your design. Names in this section are business names, not table or column names: the schema is yours to design.
+The API is at `http://localhost:8000` and the interactive OpenAPI page is at `http://localhost:8000/docs`.
 
-### Venues and seating
+## Run the concurrency test
 
-- A venue has a name (unique), a city, a full address and a maximum capacity.
-- A venue is divided into sections (for example "Plateia", "Balcão 1", "Pista"). A section name is unique within its venue.
-- A section is either **seated** or **standing**.
-  - A seated section has rows, and each row has numbered seats. A seat is identified by its section, row label ("A", "B", ..., "AA") and number. Some seats are marked as wheelchair accessible, and some as restricted view.
-  - A standing section has no seats, only a capacity (the number of people it can hold).
-- The sum of the capacities of all the sections of a venue (seats plus standing capacity) cannot exceed the venue's maximum capacity.
-- A venue has named gates ("Porta 1", "Porta Norte"), unique within the venue.
+The API must be running. The runner prints the mode, the successes, the refusals, the 5xx errors and a result, and exits with 0 or 1.
 
-### Organisers and events
+```bash
+uv run python scripts/run_concurrency.py --base-url http://localhost:8000
+```
 
-- An organiser has a company name, a Portuguese tax number (NIF, 9 digits, unique), a contact email (unique) and a phone number.
-- An event belongs to one organiser and has a title, a category (concert, theatre, comedy, sport, other), a minimum age (0, 6, 12, 16 or 18), and a description.
-- Events have details that depend on the category, and the company wants to add new ones without changing the database. For example:
-  - concert: line-up (artists in order, with the headliner marked), genres;
-  - theatre: director, cast (actor and role), duration, language, whether it has surtitles;
-  - sport: competition, home team, away team, round;
-  - comedy: comedians, whether it is recorded for TV.
-- An event has one or more **performances**. A performance is a date and time at one venue, with an expected end time. The same event can have performances at different venues (a tour).
-- Two performances at the same venue cannot overlap in time.
-- A performance has a sales opening date and time. Sales close when the performance starts.
-- A performance is `scheduled` before sales open, `on_sale` from the sales opening until it starts, `sold_out` when no seat or place is left, `finished` after its end time, and `cancelled` when the back office cancels it. Only `cancelled` is set by a person; the others follow from the time and the tickets sold (see "State that changes with time" in the README).
+| Scenario | What it does | Expected result |
+|---|---|---|
+| `same-seat` | 50 clients hold the same seat at the same moment, the winner pays | 1 success, 49 refused, 1 valid ticket |
+| `last-places` | 100 clients buy the last 10 places of a standing section | 10 successes, 90 refused, 10 tickets in the database |
+| `promo` | 20 clients use a promo code with 5 uses | 5 successes, 15 refused, 5 uses in the database |
 
-### Prices
+To run only some of them: `--only last-places promo`.
 
-- For each performance, each section of the venue has a price. Different performances of the same event can have different prices.
-- A price is in euros, with two decimal places, and cannot be negative. A price of zero is allowed (free events, invitations).
-- If a price changes after tickets were sold, tickets already sold keep the price they were sold for.
+## Stack and why
 
-### Customers
+| Part | Choice | Why |
+|---|---|---|
+| API | Python, FastAPI, uvicorn | Small and fast to write, and it generates the OpenAPI page for free |
+| Source of truth | PostgreSQL 16 | Money and seats need transactions, row locks, unique indexes, triggers and CHECK constraints, so the database refuses a wrong sale even if the app has a bug |
+| Migrations | Alembic | Versioned, repeatable schema changes in `postgres/migrations/` |
+| Reports and logs | MongoDB 7 | Report collections are derived documents shaped for aggregation pipelines, and the hold-attempt log expires with a TTL index after 90 days |
+| Real-time data | Redis 7 | The seat map, the hold expiry, the hold-attempt limit and the trending list need fast reads and keys that expire |
+| Run | Docker Compose, uv | One command per service and a pinned Python environment |
 
-- A customer has a name, an email (unique), a password hash, a date of birth, a phone number and the date they registered.
-- A customer can only buy tickets for a performance if they are at least the event's minimum age on the day of the performance.
+PostgreSQL is written first and always wins. Redis and MongoDB hold copies that can be rebuilt from it (`redis/rebuild.py`, `mongodb/export_reports.py`). See [docs/architecture.md](docs/architecture.md).
 
-### Seat holds
+The project does not use Django or Prisma. The PostgreSQL files are the Alembic migrations in `postgres/migrations/`, the seed in `postgres/seed/` and a schema snapshot in `scripts/schema.sql`.
 
-- Before paying, a customer chooses seats (in a seated section) or a number of places (in a standing section) for one performance with status `on_sale`. Those seats or places are **held** for that customer for **10 minutes**.
-- While a seat is held, no other customer can hold it or buy it.
-- If the customer does not pay within 10 minutes, the hold expires and the seats become available again, without any action by the customer or by a person.
-- A customer can hold at most **6 tickets per performance**, counting the tickets they already bought for that performance. This limit must hold for requests made one after another; simultaneous requests by the same customer are not tested.
-- A customer can make at most **10 hold attempts per minute**. Further attempts in that minute are rejected. This stops bots.
+## PostgreSQL ER diagram
 
-### Orders, tickets and payments
+```mermaid
+erDiagram
+    organisers ||--o{ events : publishes
+    events ||--o{ performances : has
+    venues ||--o{ performances : hosts
+    venues ||--o{ gates : has
+    venues ||--o{ sections : has
+    sections ||--o{ seats : has
+    performances ||--o{ section_prices : sets
+    sections ||--o{ section_prices : priced_in
+    customers ||--o{ holds : makes
+    performances ||--o{ holds : for
+    holds ||--o{ hold_items : contains
+    sections ||--o{ hold_items : in
+    seats |o--o{ hold_items : reserves
+    events |o--o{ promo_codes : restricts
+    customers ||--o{ orders : places
+    performances ||--o{ orders : for
+    holds |o--o{ orders : pays
+    promo_codes |o--o{ orders : discounts
+    orders ||--o{ tickets : issues
+    performances ||--o{ tickets : admits
+    sections ||--o{ tickets : in
+    seats |o--o{ tickets : assigns
+    orders ||--o{ payments : has
+    gates ||--o{ scan_records : scans_at
+    tickets |o--o{ scan_records : scanned
 
-- An order belongs to one customer and contains one or more tickets, all for the same performance.
-- An order has a status: `pending`, `paid`, `cancelled` or `refunded`, the date and time it was created and, when it applies, paid.
-- The order lifecycle:
-  1. The customer's first checkout attempt for a hold creates the order as `pending`, with the held seats or places.
-  2. An approved payment makes the order `paid`, issues its tickets and releases the hold. This happens in one PostgreSQL transaction.
-  3. A declined payment is recorded with status `declined`. The order stays `pending` and the hold keeps running, so the customer can try again before it expires.
-  4. If the hold expires before an approved payment, the order becomes `cancelled`. A payment attempt for an order whose hold has expired is refused.
-  5. A paid order can later become `refunded` (see [Cancellations and refunds](#cancellations-and-refunds)).
-- A ticket is for one performance and either one specific seat (seated section) or one place in a standing section. It records the price it was sold for, a unique code printed on it (12 random characters) and a status: `valid`, `used` or `cancelled`.
-- **A seat can never have two tickets with status `valid` or `used` for the same performance.**
-- **The number of `valid` or `used` tickets in a standing section for a performance can never exceed the section's capacity.**
-- A promo code has a code (unique), a discount (a percentage between 1 and 100, or a fixed amount in euros, never both), a validity period, an optional event it is restricted to, and a maximum number of uses. One order uses at most one promo code. A use counts when the order becomes `paid`, and is not given back if the order is later refunded. **A promo code can never be used more times than its maximum.**
-- The total of an order is the sum of its tickets minus the discount. It can never be negative.
-- A payment belongs to one order and has an amount, a method (`card`, `mbway` or `multibanco`), a status (`approved`, `declined` or `refunded`), the date and time, and a provider reference (unique).
-- Payments are simulated. The request to pay carries a field `simulate` with the value `approved` or `declined`, and the app records the payment with that outcome and a generated provider reference.
+    organisers {
+        uuid id PK
+        text company_name
+        char nif UK
+        text contact_email UK
+        text phone
+    }
+    venues {
+        uuid id PK
+        text name UK
+        text city
+        text address
+        int max_capacity
+    }
+    gates {
+        uuid id PK
+        uuid venue_id FK
+        text name
+    }
+    sections {
+        uuid id PK
+        uuid venue_id FK
+        text name
+        text kind
+        int standing_capacity
+    }
+    seats {
+        uuid id PK
+        uuid section_id FK
+        text row_label
+        int seat_number
+        bool is_wheelchair_accessible
+        bool is_restricted_view
+    }
+    events {
+        uuid id PK
+        uuid organiser_id FK
+        text title
+        text category
+        int min_age
+        jsonb details
+    }
+    performances {
+        uuid id PK
+        uuid event_id FK
+        uuid venue_id FK
+        timestamptz starts_at
+        timestamptz ends_at
+        timestamptz sales_open_at
+        text status
+    }
+    section_prices {
+        uuid performance_id FK
+        uuid section_id FK
+        numeric price
+    }
+    customers {
+        uuid id PK
+        text name
+        text email UK
+        text password_hash
+        date date_of_birth
+        text phone
+        timestamptz registered_at
+    }
+    holds {
+        uuid id PK
+        uuid customer_id FK
+        uuid performance_id FK
+        text status
+        timestamptz created_at
+        timestamptz expires_at
+    }
+    hold_items {
+        uuid id PK
+        uuid hold_id FK
+        uuid section_id FK
+        uuid seat_id FK
+        int places
+    }
+    promo_codes {
+        uuid id PK
+        text code UK
+        int percent_off
+        numeric amount_off
+        timestamptz valid_from
+        timestamptz valid_until
+        uuid event_id FK
+        int max_uses
+        int uses
+    }
+    orders {
+        uuid id PK
+        uuid customer_id FK
+        uuid performance_id FK
+        uuid hold_id FK
+        uuid promo_code_id FK
+        text status
+        numeric total
+        timestamptz created_at
+        timestamptz paid_at
+    }
+    tickets {
+        uuid id PK
+        uuid order_id FK
+        uuid performance_id FK
+        uuid section_id FK
+        uuid seat_id FK
+        numeric price_paid
+        char code UK
+        text status
+        timestamptz issued_at
+    }
+    payments {
+        uuid id PK
+        uuid order_id FK
+        numeric amount
+        text method
+        text status
+        text provider_reference UK
+        timestamptz created_at
+    }
+    scan_records {
+        uuid id PK
+        char ticket_code
+        uuid gate_id FK
+        uuid ticket_id FK
+        uuid staff_id
+        text result
+        timestamptz scanned_at
+    }
+```
 
-### Cancellations and refunds
+## API
 
-- A customer can cancel a paid order up to 48 hours before the performance. Its tickets become `cancelled`, the seats become available again, the order becomes `refunded`, and a payment with status `refunded` and the same amount is recorded.
-- When the back office cancels a performance, every paid order for it is refunded in the same way, and the performance becomes `cancelled`.
+The interactive OpenAPI page is at `http://localhost:8000/docs`.
 
-### Check-in
+**Who is acting.** There is no login. A request says who is acting with the `X-User-Id` header, which holds the customer's UUID. The server checks that the hold or order belongs to that user and answers 404 otherwise. Check-in carries the staff member in the body (`staff_id`), and cancelling a performance is a back-office action with no user header.
 
-- At the door, staff scan the ticket code at a gate of the venue.
-- A ticket can be checked in only on the day of its performance (Lisbon time), only if it is `valid`, and only once. After check-in it becomes `used`.
-- Every scan is recorded with the ticket code read, the gate, the staff member, the date and time and the result (`accepted`, `already_used`, `cancelled`, `wrong_day`, `unknown_code`), including the scans that were rejected.
+| Flow | Endpoint | Who |
+|---|---|---|
+| Health | `GET /health/services` | Anyone |
+| Events | `GET /events/search?limit=20` | Anyone |
+| F1 Seat map | `GET /performances/{performance_id}/seat-map` | `X-User-Id` |
+| F2 Hold | `POST /performances/{performance_id}/holds` | `X-User-Id` |
+| F3 Checkout | `POST /checkout` | `X-User-Id` |
+| F4 Cancel an order | `POST /orders/{order_id}/cancel` | `X-User-Id` |
+| F5 Check-in | `POST /checkin` | Gate staff (`staff_id` in the body) |
+| F6 Cancel a performance | `POST /performances/{performance_id}/cancel` | Back office, no header |
+| F7 Reports | `GET /reports` and `GET /reports/{performance-sales, revenue-by-organiser, top-events-by-city, occupancy, promo-effectiveness, failed-attempts-by-hour}` | Back office |
 
-## Where the rules are enforced
+## Authors
 
-Must be enforced by PostgreSQL:
+| Part | Name | GitHub | Email |
+|---|---|---|---|
+| Setup, 1. Seats and holds (F1, F2) | Dinis | [dinobuefixe](https://github.com/dinobuefixe) | 235762133+dinobuefixe@users.noreply.github.com |
+| 2. Purchase and tickets (F3, F4, F5, F6) | Sabrina | [sabsushi](https://github.com/sabsushi) | sabrina.etic@gmail.com |
+| 3. Data and reports (F7) | Cris | [CrisAxe](https://github.com/crisaxe)  | 78100242+CrisAxe@users.noreply.github.com |
 
-- A seat never has two `valid` or `used` tickets for the same performance.
-- A standing section never has more `valid` or `used` tickets for a performance than its capacity.
-- Two performances at the same venue never overlap in time.
-- A promo code is never used more times than its maximum, and has a percentage or a fixed amount, never both.
-- Prices, ticket prices and order totals are never negative; a percentage discount is between 1 and 100.
-- Unique values: venue name, section name within a venue, seat within its section, gate name within a venue, organiser NIF and email, customer email, ticket code, provider reference.
-- A NIF has exactly 9 digits; statuses, categories and minimum ages only take the values listed above.
-- The scan records are never updated or deleted by the app role.
 
-May be enforced in PostgreSQL or in the app (say which in `docs/postgres.md`):
+## Documentation
 
-- The sum of the section capacities does not exceed the venue capacity.
-- The customer's minimum age.
-- The limit of 6 tickets per customer per performance.
-- Holds only for performances `on_sale`; cancellation only up to 48 hours before; check-in only on the day.
-- The limit of 10 hold attempts per minute.
-
-## Flows the app must implement
-
-All flows are mandatory. F2 and F3 are the concurrent flows.
-
-| Flow | Description |
-|------|-------------|
-| F1. Seat map | For a performance, list every section with its price and, for each seat, whether it is free, held or sold; for standing sections, the places left. This is the most requested page during an on-sale. **Read from Redis**: a repeated request must not query PostgreSQL. |
-| F2. Hold | A customer holds seats or standing places for a performance, with every rule in [Seat holds](#seat-holds). |
-| F3. Checkout | A customer pays for their held seats, optionally with a promo code, following the [order lifecycle](#orders-tickets-and-payments). |
-| F4. Cancel | A customer cancels a paid order, with the rules in [Cancellations and refunds](#cancellations-and-refunds). |
-| F5. Check-in | Staff scan a ticket code at a gate. |
-| F6. Cancel performance | The back office cancels a performance and every order is refunded. |
-| F7. Reports | The back office reads the reports of [Reports](#reports-mongodb). |
-
-## The concurrent flow
-
-The rules under test are:
-
-1. A seat is never sold or held twice for the same performance.
-2. A standing section never sells more places than its capacity.
-3. A promo code is never used more times than its maximum.
-
-Project must cover at least these two scenarios:
-
-- **Same seat** (F2, then F3). The fixture creates a performance `on_sale` and 50 customers. All 50 send a hold request for the same seat at the same moment. Exactly one hold succeeds and 49 are refused. The winner then pays with `simulate=approved`. At the end, PostgreSQL has exactly one `valid` ticket for that seat.
-- **Last places** (F2 and F3 together). The fixture creates a standing section with 10 places left and 100 customers. Each customer holds 1 place and immediately pays, all 100 at the same moment. At the end, exactly 10 have a `paid` order and PostgreSQL has exactly as many `valid` tickets in the section as its capacity.
-
-Covering the promo code rule too is a good extension.
-
-## MongoDB collections
-
-Mandatory:
-
-- **Hold-attempt log**: one document per hold attempt (customer, performance, the seats or number of places asked for, the result and the reason if refused, the time). Written by the app on every attempt, refused ones included. Kept for 90 days, with a TTL index.
-- **Report collections**: the derived collections written by the report export (see the README), with the data your pipelines need: for example one document per performance with its sales, or one per paid order with its tickets. The shape is yours to design.
-
-You decide:
-
-- Where the event details that depend on the category (see [Organisers and events](#organisers-and-events)) are stored: in MongoDB, in a `jsonb` column, or in tables. Justify the choice in `docs/mongodb.md`.
-
-## Reports (MongoDB)
-
-The back office reads these reports often and does not want them computed from PostgreSQL on every request. Your pipelines must answer at least 3 of them:
-
-1. For each performance: tickets sold and revenue per section, revenue per payment method, promo codes used and the discount they gave, and the check-in rate (checked-in tickets over sold tickets).
-2. Revenue per organiser per month, for the last 12 months.
-3. The 10 events that sold most tickets in each city in the last 30 days.
-4. Occupancy per venue: for each venue, the average percentage of capacity sold across its performances in the last 90 days, seated and standing sections separately.
-5. Promo code effectiveness: for each code, the number of orders, the total discount and the average order value with and without a code for the same event.
-6. The hours of the day with most hold attempts that did not end in a sale (from the hold-attempt log).
-
-## Real-time features (Redis)
-
-- The seat map (F1) during an on-sale, without hitting PostgreSQL on every request.
-- The holds, with their 10-minute expiry.
-- The limit of 10 hold attempts per customer per minute.
-- A "trending now" list: the 20 events with most tickets sold in the last hour, updated with every sale.
-- Live counters per performance: tickets sold, places left per section.
-
-## Data that expires
-
-| Data | How long it lives | Where |
-|------|-------------------|-------|
-| A seat hold | 10 minutes after it is made, unless the order is paid first | you decide |
-| The hold-attempt counter of a customer | 1 minute | you decide |
-| The "trending now" window | sales of the last hour | you decide |
-| The hold-attempt log | 90 days | MongoDB, with a TTL index |
-
-Document each decision in `docs/architecture.md`.
-
-## Frequent queries (PostgreSQL)
-
-Use at least 3 of these for the `EXPLAIN` evidence required in the README:
-
-1. The sold seats of a performance (for the seat map and for the Redis rebuild).
-2. The orders of a customer, newest first, 20 per page.
-3. The tickets of a performance with status `valid` or `used`, counted per section.
-4. The check-ins of a performance per gate in the last hour.
-5. Performances on sale in a city in the next 30 days, ordered by date.
-6. The revenue of a performance (paid orders minus refunds).
-
-## Seed volumes
-
-| Data | Volume |
-|------|--------|
-| Venues | 30, in at least 8 cities |
-| Seats | about 150,000 in total, plus standing sections |
-| Organisers | 200 |
-| Events | 1,500 |
-| Performances | 4,000, between 12 months ago and 6 months from now |
-| Customers | 100,000 |
-| Orders | about 450,000 |
-| Tickets | at least 1,000,000 |
-| Payments | one per paid order, plus declined attempts and refunds |
-| Check-ins | for most tickets of past performances |
-| Hold-attempt log (MongoDB) | at least 50,000 documents, within the last 90 days |
-| Report collections (MongoDB) | written by the report export from the seeded data |
-
-Past performances are `finished` and most of their tickets are `used`. Some performances are `cancelled`, with their orders refunded. Some performances are sold out. Some events sell far more than others.
-
-## Ideas to go further
-
-- A waiting list per performance: when a ticket is cancelled, the first customer on the list gets a hold on it.
-- A queue for on-sales: customers who arrive before sales open get a random position and are let in by batches.
-- Ticket transfer from one customer to another, with a new code and the old one cancelled.
-- Dynamic pricing: the price of a section rises as it fills, without changing the price of tickets already sold.
-- Season tickets valid for every performance of an event.
-
-## Part 2: orders, tickets and check-in (M2)
-
-| Endpoint | Who | What it does |
-|----------|-----|--------------|
-| `POST /checkout` | Customer (`X-User-Id` header) | Pays a hold with a simulated payment (`approved` or `declined`), with an optional promo code. An approved payment creates the order as `paid` and issues the tickets. A declined payment keeps the order `pending` and the hold running. |
-| `POST /orders/{order_id}/cancel` | Customer (`X-User-Id` header) | Cancels a paid order up to 48 hours before the performance. Creates a `refunded` payment and sets the tickets to `cancelled`. |
-| `POST /performances/{performance_id}/cancel` | Organiser (no user header) | Cancels a performance, refunds its paid orders, cancels its pending orders and releases its active holds. |
-| `POST /checkin` | Gate staff | Scans a ticket code at a gate. Results: `accepted`, `already_used`, `cancelled`, `wrong_day`, `unknown_code`. Every scan is recorded. |
-
-Tests (they need the stack running):
-- `python app/tests/test_promo.py`: 20 clients use a promo code with 5 uses.
-- `python app/tests/test_last_places.py`: 100 clients buy the last 10 standing places.
-
-Seed for orders, tickets, payments and scans: `postgres/seed/part2.sql`.
+| Document | What it covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Which engine is the source of truth for each piece of data and what happens if the second write fails |
+| [docs/concurrency.md](docs/concurrency.md) | The concurrency rules, the tests and how the database enforces them |
+| [docs/postgres.md](docs/postgres.md) | The PostgreSQL design, indexes and `EXPLAIN` evidence |
+| [docs/mongodb.md](docs/mongodb.md) | The MongoDB collections and the report pipelines |
+| [docs/redis.md](docs/redis.md) | The Redis keys, expiry and rebuild |
+| [docs/runbook.md](docs/runbook.md) | How to operate, rebuild and troubleshoot |
+| [docs/ai-usage.md](docs/ai-usage.md) | Where AI was used and what was checked by hand |
