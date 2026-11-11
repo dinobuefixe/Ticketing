@@ -39,3 +39,21 @@ I used Claude as a learning aid and assistant, as listed above. I asked it to ex
 | 8 | Seed of hold attempts `mongodb/seed_hold_attempts.py` | I rewrote a draft that was not deterministic (database `random()` and `TABLESAMPLE`), did not match the venue of each performance, and could create attempts in the future. The rewrite sorts every list by id and uses a fixed seed |
 | 9 | Same-seat concurrency test `app/tests/test_same_seat.py` and the naive version `app/naive_holds.py` | The test fires 50 requests at the same seat with a barrier and checks there is one active hold in the database. The naive version is switched on with `HOLD_MODE=naive` so the race can be shown. Not run |
 | 10 | Trending and sales counters: `record_sale` and `trending_now` in `app/redis_ops.py` | Replaced the Lua script with Python. I did not copy the placeholder decrement of free places, because places are already taken when the hold is made, so decrementing again at sale would count them twice. Not called yet, because checkout is not finished |
+
+
+
+## Cris
+
+### Entries
+
+| # | What I used it for | What I did with the result |
+|---|---|---|
+| 1 | Indexes and EXPLAIN: `postgres/migrations/0020_indexes.py` and the evidence in `docs/postgres.md` | Started from a list of indexes matched to queries 2 to 6 of the brief, plus indexes on the foreign keys PostgreSQL does not create. [I removed N indexes I could not justify with a query.] The `down_revision` was set to the last migration of Sabrina. The three EXPLAIN comparisons with and without the index [were run on the seeded data / are not run yet] |
+| 2 | Grants: `postgres/migrations/0021_grants.py` | The migration reads the role names from the environment, gives the app role DML only and the read-only role SELECT without `password_hash`, and revokes UPDATE and DELETE on `scan_records`. [I tested that the app role gets "permission denied" on DELETE / Not run against a database] |
+| 3 | Seed script: `scripts/seed.sh` | Used as a base and adapted to the real seed files and `.env` names. It runs as owner so the constraints stay on, and cleans every table except `alembic_version`. [Ran it twice in a row, total time N s / Not run, I checked the shell syntax only] |
+| 4 | Export PostgreSQL to MongoDB: `mongodb/export_reports.py` | Each document uses the PostgreSQL id as `_id` and is written with an upsert, so the export can run twice. Money is stored in cents because MongoDB cannot store `numeric`. It reads with the read-only role. [I compared the document counts and revenue with PostgreSQL / Not run yet] |
+| 5 | Report pipelines 2 to 6 in `mongodb/pipelines/`, `mongodb/run_pipeline.py`, report validators in `mongodb/setup_collections.js` | The first draft of report 2 used `$dateSubtract` directly inside `$match`, which does not work. It was rewritten with `$expr`. Report 6 only approximates "did not end in a sale" with refused attempts, and the documentation says so. [Each result was checked against a SQL query / Not run yet] |
+| 6 | Redis rebuild and check: `redis/redis_common.py`, `redis/rebuild.py`, `redis/verify.py` | The first key names were only a proposal. [I changed them to match `app/redis_ops.py` of Dinis.] The rebuild does not use `FLUSHALL`, so the rate-limit keys are kept, and it reads PostgreSQL before deleting anything. [Tested: `FLUSHALL`, rebuild, verify exits 0, and verify exits 1 after removing a seat by hand / Not run yet] |
+| 7 | Report endpoints (F7): `app/routes/reports.py`, the router line in `app/main.py`, one line in the `Dockerfile` | Replaced six copied routes with one function and a table of reports. Added a query limit, a MongoDB timeout and 503 when MongoDB is down. The Dockerfile now copies the pipelines, because the image only copied `app/`. [Checked the 200, 422 and 503 responses and the app in Docker / Not run yet] |
+| 8 | Concurrency runner: `scripts/run_concurrency.py` | [Describe what was drafted by the AI and what you changed, or write "No AI used" if you wrote it yourself] |
+| 9 | Documentation: `docs/mongodb.md`, `docs/redis.md`, `docs/runbook.md` | Replaced the placeholders with real outputs and names. [Followed the runbook on a clean clone / Not followed yet] |
