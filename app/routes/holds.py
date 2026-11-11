@@ -174,7 +174,7 @@ def _attempt(performance_id: UUID, body: HoldRequest, customer_id: UUID):
     }
 
 
-@router.post("/performances/{performance_id}/holds", status_code=201, tags=["F2 Hold"])
+@router.post("/performances/{performance_id}/holds", status_code=201, tags=["Hold"])
 def create_hold(performance_id: UUID, body: HoldRequest, customer_id: CurrentUser):
     # Regista cada tentativa no MongoDB, aceite ou recusada (inclui o limite de 429)
     if body.seat_ids:
