@@ -1,18 +1,18 @@
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 
 from app.cache import ensure_performance_loaded
-from app.clients import rd
-from app.deps import CurrentUser
+from app.clients import pg, rd
 from app.redis_ops import perf_keys, sweep_standing
 
 router = APIRouter()
 
 
-@router.get("/performances/{performance_id}/seat-map", tags=["F1 Seat map"])
-def seat_map(performance_id: UUID, user_id: CurrentUser):
+@router.get("/performances/{performance_id}/seat-map", tags=["Seat map"])
+def seat_map(performance_id: UUID):
     pid = str(performance_id)
 
     # Só vai ao PostgreSQL na primeira vez desta performance
@@ -67,3 +67,24 @@ def seat_map(performance_id: UUID, user_id: CurrentUser):
         sections.append(entry)
 
     return {"performance_id": pid, "sections": sections}
+
+
+@router.get("/events/search", tags=["Events"])
+def search_events(
+    limit: int = Query(20, ge=1, le=100)
+):
+    with pg() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT e.title, p.id, p.starts_at, p.status, v.name, v.city
+            FROM events e
+            JOIN performances p ON p.event_id = e.id
+            JOIN venues v ON v.id = p.venue_id
+            ORDER BY (p.status = 'on_sale') DESC, p.starts_at
+            LIMIT %s
+            """,
+            (limit,)
+        )
+
+        rows = cur.fetchall()
+        return rows
