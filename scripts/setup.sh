@@ -51,7 +51,7 @@ echo "Passo 2: migrações Alembic e grants (owner)"
 
 command -v uv >/dev/null || { echo "FALHOU: uv não está instalado"; exit 1; }
 
-uv run --with-requirements app/requirements.txt \
+uv run --with-requirements requirements.txt \
     alembic -c postgres/alembic.ini upgrade head
 
 # Grants: o role app lê tudo e escreve só nas tabelas que a API usa.
