@@ -6,7 +6,7 @@ Ficheiro interno da equipa. Os documentos do projeto (README e docs/) são em in
 
 | Membro | Nome | Utilizador GitHub | Email (git config user.email) |
 |---|---|---|---|
-| M1 | Dinis | dinobuefixe |  |
+| M1 | Dinis | dinobuefixe | dinidsantos@gmail.com |
 | M2 | Sabrina | sabsushi | sabrina.etic@gmail.com |
 | M3 | Cris | CrisAxe | |
 
